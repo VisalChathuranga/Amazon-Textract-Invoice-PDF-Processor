@@ -5,80 +5,38 @@
     "LineItems": [
         {
             "Description": "Review corporate laws on Site Planning in regards to consultative request from G. Milner.",
-            "Quantity": 0.5,
+            "Quantity": 440.0,
             "UnitPrice": {
                 "value": 880.0,
                 "currency": "",
                 "formatted": "880.00"
-            },
-            "Amount": {
-                "value": 440.0,
-                "currency": "",
-                "formatted": "440.00"
             }
         },
         {
             "Description": "Call with Janet Lee on M&A strategy for Q4 2024",
-            "Quantity": 0.3,
+            "Quantity": 264.0,
             "UnitPrice": {
                 "value": 880.0,
                 "currency": "",
                 "formatted": "880.00"
-            },
-            "Amount": {
-                "value": 264.0,
-                "currency": "",
-                "formatted": "264.00"
             }
         },
         {
             "Description": "Drafted documentation for site coordinators NDA",
-            "Quantity": 0.5,
+            "Quantity": 562.5,
             "UnitPrice": {
                 "value": 1125.0,
                 "currency": "",
                 "formatted": "1,125.00"
-            },
-            "Amount": {
-                "value": 562.5,
-                "currency": "",
-                "formatted": "562.50"
             }
         },
         {
             "Description": "Prepare summary of potential considerations regarding Commercial Zoning options within city and county.",
-            "Quantity": 1.5,
+            "Quantity": 1320.0,
             "UnitPrice": {
                 "value": 880.0,
                 "currency": "",
                 "formatted": "880.00"
-            },
-            "Amount": {
-                "value": 1320.0,
-                "currency": "",
-                "formatted": "1,320.00"
-            }
-        },
-        {
-            "Amount": {
-                "value": 2586.5,
-                "currency": "$",
-                "formatted": "2,586.50 $"
-            }
-        },
-        {
-            "Amount": {
-                "value": 258.65,
-                "currency": "$",
-                "formatted": "258.65 $"
-            }
-        },
-        {
-            "Description": "Adjusted Fees on This Invoice",
-            "Amount": {
-                "value": 2327.85,
-                "currency": "$",
-                "formatted": "2,327.85 $"
             }
         }
     ],

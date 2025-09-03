@@ -2,19 +2,6 @@
     "InvoiceNumber": "79702 3A",
     "InvoiceDate": "06/13/2025",
     "InvoiceTotal": "75.00 $",
-    "LineItems": [
-        {
-            "Amount": {
-                "value": 75.0,
-                "currency": "$",
-                "formatted": "75.00 $"
-            },
-            "UnitPrice": {
-                "value": 75.0,
-                "currency": "$",
-                "formatted": "75.00 $"
-            }
-        }
-    ],
+    "LineItems": [],
     "PaymentTerms": "PLEASE STAND ADVISED, that if the Balance Due (AMOUNT OFF INVOICE) should remain unpaid for 60 days or more, the Balance Due will be increased to include a 10% penalty, and interest at 7%, allowed under Labor Code, section 4622(b). Additionally, the Balance Due will also be increased to include an additional 25% penalty, allowed under the new California Code of Regulations, Title 8, Section 9981(e), which became operative as of July 15, 2022. 4622(b)"
 }

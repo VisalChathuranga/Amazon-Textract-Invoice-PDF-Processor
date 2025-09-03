@@ -293,153 +293,86 @@ def find_invoice_total(kv_pairs, table_totals, all_text):
     
     return best_total if best_total else {"value": None, "currency": "", "formatted": ""}
 
-
 def extract_line_items_from_tables(tables, block_map):
-    """Enhanced line item extraction with better filtering of summary rows."""
+    """IMPROVED line item extraction with better table processing and debugging."""
     all_line_items = []
     
-    # Enhanced header matching
+    # Enhanced header matching with more flexible patterns
     header_patterns = {
-        "description": ["description", "service", "item", "details", "work performed", "service description"],
-        "quantity": ["qty", "quantity", "hours", "units", "hrs/qty", "hrs", "units"],
-        "unitprice": ["unit price", "price", "rate", "rate/price", "unit cost", "price per unit"],
-        "amount": ["amount", "total", "sub total", "line total", "extended amount"]
+        "description": [
+            "description", "service", "item", "details", "work performed", 
+            "service description", "product", "article", "task", "work", "desc"
+        ],
+        "quantity": [
+            "qty", "quantity", "hours", "units", "hrs/qty", "hrs", "units",
+            "amount", "number", "count", "hrs", "hours", "hrs qty", "hrs/qty"
+        ],
+        "unitprice": [
+            "unit price", "price", "rate", "rate/price", "unit cost", 
+            "price per unit", "cost", "rate", "unit rate", "each", "rate price"
+        ],
+        "amount": [
+            "amount", "total", "sub total", "line total", "extended amount",
+            "sum", "value", "cost", "charge", "price", "subtotal", "sub_total"
+        ]
     }
-    
-    def match_header_enhanced(header_text):
-        header_lower = header_text.lower().strip()
-        for field, patterns in header_patterns.items():
-            if any(pattern in header_lower for pattern in patterns):
-                return field
-        return None
-    
+
     # Words that indicate summary/total rows (should be excluded from line items)
     summary_indicators = [
-        "subtotal", "sub total", "sub-total",
+        "subtotal", "sub total", "sub-total", "sub_total",
         "total", "grand total", "final total",
         "net total", "gross total",
         "vat", "tax", "vat 19%", "sales tax",
-        "discount", "adjustment",
+        "discount", "adjustment", "fee discount",
         "balance", "amount due", "total due",
         "fees and disbursements",
         "gross amount", "net amount",
-        "incl. vat", "including vat", "excl. vat"
+        "incl. vat", "including vat", "excl. vat",
+        "adjusted fees", "total adjusted"
     ]
     
-    for page, rows_dict in tables.items():
-        if not rows_dict:
-            continue
-            
-        # Convert to sorted rows
-        rows = []
-        max_cols = max((max(r.keys()) for r in rows_dict.values()), default=0)
-        for r in sorted(rows_dict.keys()):
-            row = [rows_dict[r].get(c, "") for c in range(1, max_cols + 1)]
-            rows.append(row)
-        
-        if len(rows) < 2:  # Need at least header + 1 data row
-            continue
-        
-        # Try to identify headers
-        potential_headers = []
-        for i in range(min(3, len(rows))):  # Check first 3 rows for headers
-            header_matches = [match_header_enhanced(cell) for cell in rows[i]]
-            if sum(1 for h in header_matches if h is not None) >= 2:  # At least 2 recognized headers
-                potential_headers.append((i, header_matches))
-        
-        if not potential_headers:
-            continue
-        
-        # Use the best header row (most matches)
-        header_row_idx, headers = max(potential_headers, key=lambda x: sum(1 for h in x[1] if h is not None))
-        data_rows = rows[header_row_idx + 1:]
-        
-        for row in data_rows:
-            if not any(cell.strip() for cell in row):  # Skip empty rows
-                continue
-            
-            # Check if this is a summary row by examining all cells
-            is_summary_row = False
-            row_text_combined = " ".join(row).lower()
-            
-            for indicator in summary_indicators:
-                if indicator in row_text_combined:
-                    is_summary_row = True
-                    break
-            
-            # Skip summary rows
-            if is_summary_row:
-                continue
-                
-            line_item = {}
-            has_meaningful_data = False
-            
-            for i, cell_value in enumerate(row):
-                if i >= len(headers) or not headers[i]:
-                    continue
-                    
-                field = headers[i]
-                cell_value = cell_value.strip()
-                
-                if not cell_value:
-                    continue
-                
-                if field == "description":
-                    # Additional check for description field
-                    desc_lower = cell_value.lower()
-                    if any(indicator in desc_lower for indicator in summary_indicators):
-                        is_summary_row = True
-                        break
-                    
-                    line_item["Description"] = cell_value
-                    has_meaningful_data = True
-                elif field == "quantity":
-                    qty_info = parse_amount_with_currency(cell_value)
-                    if isinstance(qty_info["value"], (int, float)):
-                        line_item["Quantity"] = qty_info["value"]
-                        has_meaningful_data = True
-                elif field == "unitprice":
-                    price_info = parse_amount_with_currency(cell_value)
-                    line_item["UnitPrice"] = price_info
-                    if isinstance(price_info["value"], (int, float)):
-                        has_meaningful_data = True
-                elif field == "amount":
-                    amount_info = parse_amount_with_currency(cell_value)
-                    line_item["Amount"] = amount_info
-                    if isinstance(amount_info["value"], (int, float)):
-                        has_meaningful_data = True
-            
-            # Skip if determined to be summary row during processing
-            if is_summary_row:
-                continue
-            
-            # Only add line items that have meaningful business data
-            if has_meaningful_data:
-                all_line_items.append(line_item)
-    
-    return all_line_items
-
-def extract_line_items_from_tables(tables, block_map):
-    """Enhanced line item extraction with better table processing."""
-    all_line_items = []
-    
-    # Enhanced header matching
-    header_patterns = {
-        "description": ["description", "service", "item", "details", "work performed", "service description"],
-        "quantity": ["qty", "quantity", "hours", "units", "hrs/qty", "hrs", "units"],
-        "unitprice": ["unit price", "price", "rate", "rate/price", "unit cost", "price per unit"],
-        "amount": ["amount", "total", "sub total", "line total", "extended amount"]
-    }
-    
     def match_header_enhanced(header_text):
+        """More flexible header matching."""
+        if not header_text or not isinstance(header_text, str):
+            return None
+            
         header_lower = header_text.lower().strip()
+        
+        # Remove common punctuation and symbols for better matching
+        header_clean = re.sub(r'[^\w\s/]', ' ', header_lower)  # Keep forward slash for "hrs/qty"
+        header_clean = ' '.join(header_clean.split())  # Remove extra spaces
+        
+        # Check for exact matches first
         for field, patterns in header_patterns.items():
-            if any(pattern in header_lower for pattern in patterns):
-                return field
+            for pattern in patterns:
+                # Exact match
+                if header_clean == pattern:
+                    return field
+                
+                # Check if pattern appears as a whole word
+                if re.search(r'\b' + re.escape(pattern) + r'\b', header_clean):
+                    return field
+                
+                # Also check if the pattern is a substring (for compound headers like "Hrs/Qty")
+                if pattern in header_clean:
+                    return field
+                    
         return None
     
+    def is_summary_row(row_data):
+        """Check if a row contains summary/total information."""
+        row_text_combined = " ".join([str(cell) for cell in row_data]).lower()
+        
+        for indicator in summary_indicators:
+            if indicator in row_text_combined:
+                return True
+        return False
+    
+    print(f"[DEBUG] Found {len(tables)} table pages to process")
+    
     for page, rows_dict in tables.items():
         if not rows_dict:
+            print(f"[DEBUG] Page {page}: No rows found")
             continue
             
         # Convert to sorted rows
@@ -449,25 +382,62 @@ def extract_line_items_from_tables(tables, block_map):
             row = [rows_dict[r].get(c, "") for c in range(1, max_cols + 1)]
             rows.append(row)
         
+        print(f"[DEBUG] Page {page}: Found {len(rows)} rows with {max_cols} columns")
+        
+        # Print first few rows for debugging
+        for i, row in enumerate(rows[:3]):
+            print(f"[DEBUG] Row {i}: {row}")
+        
         if len(rows) < 2:  # Need at least header + 1 data row
+            print(f"[DEBUG] Page {page}: Not enough rows ({len(rows)})")
             continue
         
-        # Try to identify headers
+        # Try to identify headers with more flexibility
         potential_headers = []
-        for i in range(min(3, len(rows))):  # Check first 3 rows for headers
+        for i in range(min(4, len(rows))):  # Check first 4 rows for headers
             header_matches = [match_header_enhanced(cell) for cell in rows[i]]
-            if sum(1 for h in header_matches if h is not None) >= 2:  # At least 2 recognized headers
-                potential_headers.append((i, header_matches))
+            match_count = sum(1 for h in header_matches if h is not None)
+            
+            print(f"[DEBUG] Row {i} header matches: {header_matches} (count: {match_count})")
+            
+            if match_count >= 2:  # At least 2 recognized headers
+                potential_headers.append((i, header_matches, match_count))
         
         if not potential_headers:
-            continue
+            print(f"[DEBUG] Page {page}: No headers found")
+            # Try a more relaxed approach - look for any row with common header-like words
+            for i, row in enumerate(rows[:3]):
+                row_text = " ".join(row).lower()
+                if any(word in row_text for word in ["service", "description", "rate", "price", "amount", "total", "qty", "hours"]):
+                    print(f"[DEBUG] Row {i} might be a header based on keywords: {row}")
+                    # Try to manually map this row
+                    manual_headers = []
+                    for cell in row:
+                        manual_headers.append(match_header_enhanced(cell))
+                    if sum(1 for h in manual_headers if h is not None) >= 1:
+                        potential_headers.append((i, manual_headers, sum(1 for h in manual_headers if h is not None)))
+            
+            if not potential_headers:
+                print(f"[DEBUG] Page {page}: Still no headers found, skipping table")
+                continue
+
+        # Use the best header row (most matches, or first one with good matches)
+        header_row_idx, headers, match_count = max(potential_headers, key=lambda x: (x[2], -x[0]))
+        print(f"[DEBUG] Using header row {header_row_idx} with headers: {headers}")
         
-        # Use the best header row (most matches)
-        header_row_idx, headers = max(potential_headers, key=lambda x: sum(1 for h in x[1] if h is not None))
         data_rows = rows[header_row_idx + 1:]
+        print(f"[DEBUG] Processing {len(data_rows)} data rows")
         
-        for row in data_rows:
+        for row_idx, row in enumerate(data_rows):
             if not any(cell.strip() for cell in row):  # Skip empty rows
+                print(f"[DEBUG] Skipping empty row {row_idx}")
+                continue
+            
+            print(f"[DEBUG] Processing data row {row_idx}: {row}")
+            
+            # Check if this is a summary row
+            if is_summary_row(row):
+                print(f"[DEBUG] Skipping summary row {row_idx}: {row}")
                 continue
                 
             line_item = {}
@@ -478,37 +448,63 @@ def extract_line_items_from_tables(tables, block_map):
                     continue
                     
                 field = headers[i]
-                cell_value = cell_value.strip()
+                cell_value = str(cell_value).strip()
                 
                 if not cell_value:
                     continue
                 
+                print(f"[DEBUG] Processing field '{field}' = '{cell_value}'")
+                
                 if field == "description":
+                    # Additional check: if description contains summary terms, skip this row
+                    desc_lower = cell_value.lower()
+                    if any(indicator in desc_lower for indicator in summary_indicators):
+                        print(f"[DEBUG] Description contains summary term, skipping row")
+                        has_meaningful_data = False
+                        break  # Break out of the cell loop for this row
+                    
                     line_item["Description"] = cell_value
                     has_meaningful_data = True
+                    print(f"[DEBUG] Added description: {cell_value}")
+                    
                 elif field == "quantity":
                     qty_info = parse_amount_with_currency(cell_value)
                     if isinstance(qty_info["value"], (int, float)):
                         line_item["Quantity"] = qty_info["value"]
                         has_meaningful_data = True
+                        print(f"[DEBUG] Added quantity: {qty_info['value']}")
+                    else:
+                        # Sometimes quantity is just a number without formatting
+                        try:
+                            qty_val = float(cell_value)
+                            line_item["Quantity"] = qty_val
+                            has_meaningful_data = True
+                            print(f"[DEBUG] Added quantity (parsed): {qty_val}")
+                        except:
+                            print(f"[DEBUG] Could not parse quantity: {cell_value}")
+                            
                 elif field == "unitprice":
                     price_info = parse_amount_with_currency(cell_value)
                     line_item["UnitPrice"] = price_info
                     if isinstance(price_info["value"], (int, float)):
                         has_meaningful_data = True
+                        print(f"[DEBUG] Added unit price: {price_info}")
+                    
                 elif field == "amount":
                     amount_info = parse_amount_with_currency(cell_value)
                     line_item["Amount"] = amount_info
                     if isinstance(amount_info["value"], (int, float)):
                         has_meaningful_data = True
+                        print(f"[DEBUG] Added amount: {amount_info}")
             
             # Only add line items that have meaningful business data
             if has_meaningful_data:
-                # Skip obvious summary/total rows
-                desc = line_item.get("Description", "").lower()
-                if not any(term in desc for term in ["subtotal", "total", "tax", "discount", "grand total", "balance"]):
-                    all_line_items.append(line_item)
+                print(f"[DEBUG] Adding line item: {line_item}")
+                all_line_items.append(line_item)
+            else:
+                print(f"[DEBUG] Skipping row - no meaningful data found")
     
+    print(f"[DEBUG] Total line items extracted: {len(all_line_items)}")
     return all_line_items
 
 # ===== MAIN EXTRACTION FUNCTION =====
@@ -597,7 +593,7 @@ def extract_invoice_data(textract_output):
             invoice_data["PaymentTerms"] = v.strip()
             break
     
-    # 4. Line Items
+    # 4. Line Items (with improved extraction)
     invoice_data["LineItems"] = extract_line_items_from_tables(tables, block_map)
     
     # 5. Invoice Total
