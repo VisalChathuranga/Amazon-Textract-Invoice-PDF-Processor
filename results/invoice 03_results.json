@@ -1,0 +1,20 @@
+{
+    "InvoiceNumber": "INV-3337",
+    "InvoiceDate": "January 31, 2016",
+    "InvoiceTotal": "93.50 $",
+    "LineItems": [
+        {
+            "Amount": {
+                "value": 85.0,
+                "currency": "$",
+                "formatted": "85.00 $"
+            },
+            "UnitPrice": {
+                "value": 85.0,
+                "currency": "$",
+                "formatted": "85.00 $"
+            }
+        }
+    ],
+    "PaymentTerms": null
+}
