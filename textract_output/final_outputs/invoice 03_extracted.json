@@ -1,0 +1,26 @@
+{
+  "InvoiceNumber": "INV-3337",
+  "InvoiceDate": "January 25, 2016",
+  "LineItems": [
+    {
+      "Quantity": 1.0,
+      "Description": "Web Design This is a sample description.",
+      "UnitPrice": {
+        "value": 85.0,
+        "currency": "$",
+        "formatted": "$ 85.00"
+      },
+      "Amount": {
+        "value": 85.0,
+        "currency": "$",
+        "formatted": "$ 85.00"
+      }
+    }
+  ],
+  "InvoiceTotal": {
+    "value": 93.5,
+    "currency": "$",
+    "formatted": "$ 93.50"
+  },
+  "PaymentTerms": "Late payment is subject to fees of 5% per month."
+}

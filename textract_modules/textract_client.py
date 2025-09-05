@@ -1,391 +1,36 @@
+"""
+Main Textract processing client with comprehensive document analysis capabilities.
+Orchestrates the entire PDF-to-structured-data pipeline.
+"""
+
 import boto3
-import json
 import time
 import logging
-import hashlib
 from datetime import datetime
-import sys
-import os
 from typing import Dict, List, Any, Optional, Tuple
 from botocore.exceptions import ClientError
 from pathlib import Path
 import concurrent.futures
-from tabulate import tabulate
+import json
+import os
 import re
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s',
-    handlers=[
-        logging.FileHandler(f'textract_processing_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
+from .s3_sync import S3FolderSync
+from .formatters import MarkdownFormatter
+from .utils import (
+    parse_amount_with_currency, 
+    find_invoice_number, 
+    find_invoice_total, 
+    match_header_enhanced, 
+    is_summary_row
 )
+from .config import (
+    DATE_KEYWORDS, 
+    PAYMENT_TERMS_KEYWORDS, 
+    SUMMARY_INDICATORS
+)
+
 logger = logging.getLogger(__name__)
-
-# Patterns from previous code
-INVOICE_NUMBER_PATTERNS = [
-    r'invoice\s*(?:number|no|#)[\s:]*([A-Z0-9\-]+)',
-    r'inv[\s\-]*(?:number|no|#)[\s:]*([A-Z0-9\-]+)',
-    r'invoice[\s:]+([A-Z0-9\-]{3,})',
-    r'#([A-Z0-9\-]{3,})'
-]
-
-CURRENCY_SYMBOLS = ["€", "$", "£", "¥", "₹"]
-
-HEADER_PATTERNS = {
-    "description": [
-        "description", "service", "item", "details", "work performed",
-        "service description", "product", "article", "task", "work", "desc"
-    ],
-    "quantity": [
-        "qty", "quantity", "hours", "units", "hrs/qty", "hrs",
-        "units", "amount", "number", "count", "count", "hrs", "hours", "hrs qty", "hrs/qty"
-    ],
-    "unitprice": [
-        "unit price", "price", "rate", "rate/price", "unit cost",
-        "price per unit", "cost", "rate", "unit rate", "each", "rate price"
-    ],
-    "amount": [
-        "amount", "total", "sub total", "line total", "extended amount",
-        "sum", "value", "cost", "charge", "price", "subtotal", "sub_total"
-    ]
-}
-
-SUMMARY_INDICATORS = [
-    "subtotal", "sub total", "sub-total", "sub_total", "total", "grand total",
-    "final total", "net total", "gross total", "vat", "tax", "vat 19%", "sales tax",
-    "discount", "adjustment", "fee discount", "balance", "amount due", "total due",
-    "fees and disbursements", "gross amount", "net amount", "incl. vat", "including vat",
-    "excl. vat", "adjusted fees", "total adjusted"
-]
-
-TOTAL_KEYWORDS = [
-    ("total", 1),
-    ("subtotal", 2),
-    ("amount due", 8),
-    ("invoice total", 7),
-    ("grand total", 9),
-    ("final total", 10),
-    ("total due", 8),
-    ("gross total", 11),
-    ("gross amount", 12),
-    ("total amount", 6),
-    ("net amount", 3),
-    ("total incl", 13),
-    ("incl. vat", 14),
-    ("including vat", 14),
-    ("total fees and disbursements", 15),
-    ("balance due", 8),
-    ("amount payable", 7)
-]
-
-DATE_KEYWORDS = ["invoice date", "date", "bill date", "issued"]
-
-PAYMENT_TERMS_KEYWORDS = ["payment", "terms", "due"]
-
-class S3FolderSync:
-    """Handles intelligent synchronization between local folder and S3 bucket"""
-    
-    def __init__(self, s3_client, bucket_name: str, s3_prefix: str = "invoices/"):
-        self.s3 = s3_client
-        self.bucket_name = bucket_name
-        self.s3_prefix = s3_prefix
-        self.sync_metadata_file = ".s3_sync_metadata.json"
-        
-    def get_file_hash(self, file_path: str) -> str:
-        """Calculate MD5 hash of a file"""
-        hash_md5 = hashlib.md5()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-    
-    def load_sync_metadata(self) -> Dict:
-        """Load synchronization metadata from local cache"""
-        if os.path.exists(self.sync_metadata_file):
-            try:
-                with open(self.sync_metadata_file, 'r') as f:
-                    return json.load(f)
-            except:
-                return {}
-        return {}
-    
-    def save_sync_metadata(self, metadata: Dict):
-        """Save synchronization metadata to local cache"""
-        with open(self.sync_metadata_file, 'w') as f:
-            json.dump(metadata, f, indent=2)
-    
-    def get_s3_files(self) -> Dict[str, Dict]:
-        """Get list of files currently in S3"""
-        s3_files = {}
-        try:
-            paginator = self.s3.get_paginator('list_objects_v2')
-            pages = paginator.paginate(Bucket=self.bucket_name, Prefix=self.s3_prefix)
-            
-            for page in pages:
-                if 'Contents' in page:
-                    for obj in page['Contents']:
-                        key = obj['Key']
-                        if key.endswith('.pdf'):
-                            filename = os.path.basename(key)
-                            s3_files[filename] = {
-                                'key': key,
-                                'size': obj['Size'],
-                                'last_modified': obj['LastModified'].isoformat()
-                            }
-        except ClientError as e:
-            logger.error(f"Error listing S3 files: {e}")
-        
-        return s3_files
-    
-    def sync_folder(self, local_folder: str) -> Tuple[List[str], List[str], List[str]]:
-        """
-        Sync local folder with S3 bucket
-        
-        Returns:
-            Tuple of (uploaded_files, skipped_files, deleted_files)
-        """
-        uploaded = []
-        skipped = []
-        deleted = []
-        
-        # Load metadata
-        sync_metadata = self.load_sync_metadata()
-        s3_files = self.get_s3_files()
-        
-        # Get local PDF files
-        local_files = {}
-        for file_path in Path(local_folder).glob("*.pdf"):
-            filename = file_path.name
-            file_hash = self.get_file_hash(str(file_path))
-            local_files[filename] = {
-                'path': str(file_path),
-                'hash': file_hash,
-                'size': file_path.stat().st_size
-            }
-        
-        # Upload new or modified files
-        for filename, file_info in local_files.items():
-            s3_key = f"{self.s3_prefix}{filename}"
-            
-            # Check if file needs to be uploaded
-            needs_upload = False
-            
-            if filename not in s3_files:
-                # File doesn't exist in S3
-                needs_upload = True
-                logger.info(f"New file detected: {filename}")
-            elif filename not in sync_metadata or sync_metadata[filename]['hash'] != file_info['hash']:
-                # File has been modified
-                needs_upload = True
-                logger.info(f"Modified file detected: {filename}")
-            else:
-                # File unchanged
-                skipped.append(filename)
-                logger.info(f"Skipping unchanged file: {filename}")
-            
-            if needs_upload:
-                try:
-                    logger.info(f"Uploading {filename} to s3://{self.bucket_name}/{s3_key}")
-                    self.s3.upload_file(file_info['path'], self.bucket_name, s3_key)
-                    uploaded.append(filename)
-                    
-                    # Update metadata
-                    sync_metadata[filename] = {
-                        'hash': file_info['hash'],
-                        'size': file_info['size'],
-                        's3_key': s3_key,
-                        'last_synced': datetime.now().isoformat()
-                    }
-                except ClientError as e:
-                    logger.error(f"Failed to upload {filename}: {e}")
-        
-        # Remove files from S3 that no longer exist locally
-        for filename in s3_files:
-            if filename not in local_files:
-                s3_key = s3_files[filename]['key']
-                try:
-                    logger.info(f"Deleting {filename} from S3 (no longer exists locally)")
-                    self.s3.delete_object(Bucket=self.bucket_name, Key=s3_key)
-                    deleted.append(filename)
-                    
-                    # Remove from metadata
-                    if filename in sync_metadata:
-                        del sync_metadata[filename]
-                except ClientError as e:
-                    logger.error(f"Failed to delete {filename} from S3: {e}")
-        
-        # Save updated metadata
-        self.save_sync_metadata(sync_metadata)
-        
-        return uploaded, skipped, deleted
-
-class MarkdownFormatter:
-    """Formats Textract results as well-structured Markdown"""
-    
-    @staticmethod
-    def format_results(results: Dict, filename: str) -> str:
-        """Convert extraction results to formatted Markdown"""
-        md = []
-        
-        # Header
-        md.append(f"# Document Analysis Report: {filename}")
-        md.append(f"\n*Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n")
-        
-        # Metadata section
-        md.append("## Processing Metadata\n")
-        metadata = results.get('metadata', {})
-        md.append(f"- **Status:** {metadata.get('status', 'Unknown')}")
-        md.append(f"- **Processing Time:** {metadata.get('processing_time', 'N/A')}")
-        md.append(f"- **Total Blocks:** {metadata.get('total_blocks', 0)}")
-        
-        # Layout Elements
-        layout = results.get('layout', {})
-        if any(layout.values()):
-            md.append("\n## Document Structure\n")
-            
-            # Titles
-            if layout.get('titles'):
-                md.append("### Document Titles\n")
-                for i, title in enumerate(layout['titles'], 1):
-                    md.append(f"{i}. **{title.get('text', '')}** *(Confidence: {title.get('confidence', 0):.1f}%)*")
-            
-            # Headers
-            if layout.get('headers'):
-                md.append("\n### Headers\n")
-                for header in layout['headers']:
-                    md.append(f"- {header.get('text', '')} *(Confidence: {header.get('confidence', 0):.1f}%)*")
-            
-            # Section Headers
-            if layout.get('section_headers'):
-                md.append("\n### Section Headers\n")
-                for header in layout['section_headers']:
-                    md.append(f"- **{header.get('text', '')}** *(Confidence: {header.get('confidence', 0):.1f}%)*")
-            
-            # Paragraphs (first few)
-            if layout.get('paragraphs'):
-                md.append("\n### Main Content (Sample)\n")
-                for para in layout['paragraphs'][:3]:  # Show first 3 paragraphs
-                    text = para.get('text', '')
-                    if len(text) > 200:
-                        text = text[:200] + "..."
-                    md.append(f"\n> {text}\n")
-                if len(layout['paragraphs']) > 3:
-                    md.append(f"\n*... and {len(layout['paragraphs']) - 3} more paragraphs*")
-            
-            # Lists
-            if layout.get('lists'):
-                md.append("\n### Lists Found\n")
-                for lst in layout['lists']:
-                    md.append(f"- {lst.get('text', '')}")
-        
-        # Forms Data
-        if results.get('forms'):
-            md.append("\n## Form Fields\n")
-            md.append("\n| Field | Value | Confidence |")
-            md.append("|-------|-------|------------|")
-            for form in results['forms'][:20]:  # Limit to 20 fields for readability
-                key = form.get('key', '').replace('|', '\\|')
-                value = form.get('value', '').replace('|', '\\|')
-                confidence = form.get('confidence', 0)
-                md.append(f"| {key} | {value} | {confidence:.1f}% |")
-            
-            if len(results['forms']) > 20:
-                md.append(f"\n*... and {len(results['forms']) - 20} more fields*")
-        
-        # Tables
-        if results.get('tables'):
-            md.append("\n## Tables\n")
-            for i, table in enumerate(results['tables'], 1):
-                md.append(f"\n### Table {i}")
-                md.append(f"*Dimensions: {table['row_count']} rows × {table['column_count']} columns*")
-                md.append(f"*Confidence: {table['confidence']:.1f}%*\n")
-                
-                if table.get('rows'):
-                    # Create markdown table
-                    rows = table['rows'][:10]  # Limit to first 10 rows
-                    if rows:
-                        # Header row
-                        header = rows[0] if rows else []
-                        md.append("| " + " | ".join(str(cell).replace('|', '\\|') for cell in header) + " |")
-                        md.append("|" + "---|" * len(header))
-                        
-                        # Data rows
-                        for row in rows[1:]:
-                            md.append("| " + " | ".join(str(cell).replace('|', '\\|') for cell in row) + " |")
-                        
-                        if len(table['rows']) > 10:
-                            md.append(f"\n*... and {len(table['rows']) - 10} more rows*")
-        
-        # Query Results
-        if results.get('queries'):
-            md.append("\n## Custom Query Results\n")
-            for query in results['queries']:
-                md.append(f"\n**Q:** {query.get('query', '')}")
-                md.append(f"**A:** {query.get('answer', 'No answer found')}")
-                md.append(f"*Confidence: {query.get('confidence', 0):.1f}%*\n")
-        
-        # Signatures
-        if results.get('signatures'):
-            md.append("\n## Signatures\n")
-            md.append(f"\n**Total signatures detected:** {len(results['signatures'])}\n")
-            for i, sig in enumerate(results['signatures'], 1):
-                md.append(f"- **Signature {i}:** Page {sig.get('page', 'N/A')}, Confidence: {sig.get('confidence', 0):.1f}%")
-        
-        # Footer
-        md.append("\n---")
-        md.append("\n*This document was automatically generated by AWS Textract*")
-        
-        return "\n".join(md)
-    
-    @staticmethod
-    def create_summary_report(all_results: List[Tuple[str, Dict]]) -> str:
-        """Create a summary report for all processed documents"""
-        md = []
-        
-        # Header
-        md.append("# Batch Processing Summary Report")
-        md.append(f"\n*Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n")
-        md.append(f"**Total Documents Processed:** {len(all_results)}\n")
-        
-        # Summary table
-        md.append("## Document Overview\n")
-        md.append("| Document | Status | Processing Time | Forms | Tables | Signatures |")
-        md.append("|----------|--------|-----------------|-------|--------|------------|")
-        
-        total_forms = 0
-        total_tables = 0
-        total_signatures = 0
-        
-        for filename, results in all_results:
-            status = results['metadata'].get('status', 'Unknown')
-            time = results['metadata'].get('processing_time', 'N/A')
-            forms = len(results.get('forms', []))
-            tables = len(results.get('tables', []))
-            signatures = len(results.get('signatures', []))
-            
-            total_forms += forms
-            total_tables += tables
-            total_signatures += signatures
-            
-            status_text = "Completed" if status == "completed" else "Failed"
-            md.append(f"| {filename} | {status_text} {status} | {time} | {forms} | {tables} | {signatures} |")
-        
-        # Statistics
-        md.append("\n## Overall Statistics\n")
-        md.append(f"- **Total Form Fields Extracted:** {total_forms}")
-        md.append(f"- **Total Tables Extracted:** {total_tables}")
-        md.append(f"- **Total Signatures Detected:** {total_signatures}")
-        
-        # Individual document reports
-        md.append("\n## Individual Document Reports\n")
-        for filename, _ in all_results:
-            report_name = f"{Path(filename).stem}_report.md"
-            md.append(f"- [{filename}](./{report_name})")
-        
-        return "\n".join(md)
 
 class TextractPDFProcessor:
     """
@@ -398,7 +43,7 @@ class TextractPDFProcessor:
     """
     
     def __init__(self, region_name='us-east-1'):
-        """Initialize AWS Textract client"""
+        """Initialize AWS clients with region configuration."""
         try:
             self.textract = boto3.client('textract', region_name=region_name)
             self.s3 = boto3.client('s3', region_name=region_name)
@@ -442,7 +87,7 @@ class TextractPDFProcessor:
             return None
     
     def wait_for_completion(self, job_id: str, max_wait_time: int = 300) -> Optional[Dict]:
-        """Wait for document analysis to complete"""
+        """Poll Textract job status until completion or timeout."""
         logger.info(f"Waiting for job {job_id} to complete...")
         start_time = time.time()
         
@@ -472,7 +117,7 @@ class TextractPDFProcessor:
                 return None
     
     def get_all_pages(self, job_id: str) -> List[Dict]:
-        """Get all pages of results for multi-page documents"""
+        """Retrieve all pages of results for multi-page documents."""
         logger.info("Retrieving all pages of analysis results...")
         pages = []
         next_token = None
@@ -504,7 +149,7 @@ class TextractPDFProcessor:
         return pages
     
     def extract_layout_elements(self, blocks: List[Dict]) -> Dict[str, List]:
-        """Extract layout elements from blocks"""
+        """Extract LAYOUT blocks into categorized elements (titles, headers, etc.)"""
         logger.info("Extracting layout elements...")
         
         layout = {
@@ -549,7 +194,7 @@ class TextractPDFProcessor:
         return layout
     
     def extract_forms(self, blocks: List[Dict]) -> List[Dict]:
-        """Extract form key-value pairs"""
+        """Extract KEY_VALUE_SET blocks into key-value pairs."""
         logger.info("Extracting form data...")
         
         key_map = {}
@@ -588,7 +233,7 @@ class TextractPDFProcessor:
         return forms
     
     def extract_tables(self, blocks: List[Dict]) -> List[Dict]:
-        """Extract table data"""
+        """Extract TABLE blocks into structured row-column data."""
         logger.info("Extracting table data...")
         
         tables = []
@@ -642,7 +287,7 @@ class TextractPDFProcessor:
         return tables
     
     def extract_queries(self, blocks: List[Dict]) -> List[Dict]:
-        """Extract query results"""
+        """Extract QUERY blocks and their associated answers."""
         logger.info("Extracting query results...")
         
         queries = []
@@ -672,7 +317,7 @@ class TextractPDFProcessor:
         return queries
     
     def extract_signatures(self, blocks: List[Dict]) -> List[Dict]:
-        """Extract signature detections"""
+        """Extract SIGNATURE blocks with confidence scores."""
         logger.info("Extracting signatures...")
         
         signatures = []
@@ -693,7 +338,7 @@ class TextractPDFProcessor:
         return signatures
     
     def _get_text_from_block(self, block: Dict, blocks: List[Dict]) -> str:
-        """Extract text from a block"""
+        """Extract text content from block by resolving child relationships."""
         text = ''
         
         if 'Text' in block:
@@ -714,7 +359,7 @@ class TextractPDFProcessor:
         return text.strip()
     
     def _get_text_from_cell(self, cell: Dict, blocks: List[Dict]) -> str:
-        """Extract text from a table cell"""
+        """Extract text content from table cells."""
         text = ''
         
         if 'Relationships' in cell:
@@ -728,7 +373,7 @@ class TextractPDFProcessor:
         return text.strip()
     
     def _find_value_block(self, key_block: Dict, value_map: Dict) -> Optional[Dict]:
-        """Find the value block associated with a key block"""
+        """Find value block associated with a key block using relationships."""
         if 'Relationships' in key_block:
             for relationship in key_block['Relationships']:
                 if relationship['Type'] == 'VALUE':
@@ -745,7 +390,13 @@ class TextractPDFProcessor:
                                enable_queries: bool = True,
                                enable_signatures: bool = True,
                                custom_queries: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Process a single PDF document from S3"""
+        """
+        Complete processing pipeline for a single PDF document:
+        1. Start Textract analysis with configured features
+        2. Wait for completion and retrieve all pages
+        3. Extract different element types based on enabled features
+        4. Return structured results with metadata
+        """
         
         results = {
             'metadata': {
@@ -834,207 +485,16 @@ class TextractPDFProcessor:
             results['metadata']['processing_time'] = f"{processing_time:.2f} seconds"
             return results
     
-    def clean_currency_text(self, text: str) -> Tuple[Optional[float], str]:
-        """Extract currency symbol and clean numeric value."""
-        if not text:
-            return None, ""
-            
-        # Find currency symbols
-        currency = ""
-        for symbol in CURRENCY_SYMBOLS:
-            if symbol in text:
-                currency = symbol
-                break
-                
-        # Clean numeric value - handle European and US formats
-        cleaned = text
-        for symbol in CURRENCY_SYMBOLS:
-            cleaned = cleaned.replace(symbol, "")
-        cleaned = cleaned.replace(",", "").strip()
-        
-        # Handle European decimal format (1.234,56 -> 1234.56)
-        if "." in cleaned and cleaned.count(".") > 1:
-            # Multiple dots - European thousand separator
-            parts = cleaned.split(".")
-            if len(parts[-1]) == 2:  # Last part is likely cents
-                cleaned = "".join(parts[:-1]) + "." + parts[-1]
-            else:
-                cleaned = cleaned.replace(".", "")
-                
-        try:
-            # Extract numeric value using regex
-            match = re.search(r'[-+]?\d*\.?\d+', cleaned)
-            if match:
-                value = float(match.group())
-                return value, currency
-        except Exception as e:
-            logger.debug(f"Could not parse currency value from '{text}': {str(e)}")
-            
-        return None, currency
-    
-    def parse_amount_with_currency(self, text: str) -> Dict[str, Any]:
-        """Parse amount and return with currency info."""
-        if not text or text == "":
-            return {"value": "", "currency": "", "formatted": ""}
-            
-        value, currency = self.clean_currency_text(str(text))
-        
-        if isinstance(value, (int, float)):
-            formatted = f"{value:,.2f}"
-            if currency:
-                formatted = f"{currency} {formatted}"
-            return {"value": value, "currency": currency, "formatted": formatted}
-        else:
-            return {"value": text, "currency": "", "formatted": str(text)}
-    
-    def find_invoice_number(self, kv_pairs: Dict, all_text: str) -> Optional[str]:
-        """Enhanced invoice number detection."""
-        # Check key-value pairs first
-        for k, v in kv_pairs.items():
-            if any(term in k for term in ["invoice number", "invoice no", "invoice #", "inv number", "inv no"]):
-                if v and v.strip():
-                    logger.debug(f"Found invoice number in key-value pair: {v.strip()}")
-                    return v.strip()
-                    
-        # Search in all text with patterns
-        for pattern in INVOICE_NUMBER_PATTERNS:
-            match = re.search(pattern, all_text, re.IGNORECASE)
-            if match:
-                invoice_number = match.group(1).strip()
-                logger.debug(f"Found invoice number with regex pattern: {invoice_number}")
-                return invoice_number
-                
-        logger.warning("Invoice number not found")
-        return None
-    
-    def find_invoice_total(self, kv_pairs: Dict, table_totals: Dict, all_text: str) -> Dict[str, Any]:
-        """Enhanced total detection with better priority and currency handling."""
-        best_total = None
-        best_priority = 0
-        best_source = ""
-        
-        # Priority 1: Search in key-value pairs with enhanced matching
-        for k, v in kv_pairs.items():
-            k_lower = k.lower().strip()
-            for keyword, priority in TOTAL_KEYWORDS:
-                if keyword in k_lower:
-                    amount_info = self.parse_amount_with_currency(v)
-                    if isinstance(amount_info["value"], (int, float)) and amount_info["value"] > 0:
-                        # Boost priority for more specific matches
-                        actual_priority = priority
-                        
-                        # Extra boost for exact matches
-                        if k_lower == keyword or k_lower.replace(":", "").strip() == keyword:
-                            actual_priority += 5
-                            
-                        # Boost for VAT/tax inclusive amounts
-                        if any(term in k_lower for term in ["incl", "including", "with vat", "with tax"]):
-                            actual_priority += 3
-                            
-                        if actual_priority > best_priority:
-                            best_total = amount_info
-                            best_priority = actual_priority
-                            best_source = f"KV: {k}"
-        
-        # Priority 2: Enhanced table totals search
-        table_candidates = []
-        for total_text, value in table_totals.items():
-            total_text_lower = total_text.lower()
-            for keyword, priority in TOTAL_KEYWORDS:
-                if keyword in total_text_lower:
-                    amount_info = self.parse_amount_with_currency(value)
-                    if isinstance(amount_info["value"], (int, float)) and amount_info["value"] > 0:
-                        # Boost for comprehensive totals
-                        actual_priority = priority
-                        
-                        # Special handling for specific patterns
-                        if "fees and disbursements" in total_text_lower:
-                            actual_priority += 10  # Very high priority
-                        elif "gross" in total_text_lower and ("incl" in total_text_lower or "vat" in total_text_lower):
-                            actual_priority += 8  # High priority for gross including VAT
-                        elif "grand total" in total_text_lower:
-                            actual_priority += 7
-                        elif "final" in total_text_lower:
-                            actual_priority += 6
-                            
-                        table_candidates.append((amount_info, actual_priority, f"Table: {total_text[:50]}"))
-        
-        # Find best table candidate
-        if table_candidates:
-            table_candidates.sort(key=lambda x: x[1], reverse=True)  # Sort by priority
-            best_table = table_candidates[0]
-            if best_table[1] > best_priority:
-                best_total = best_table[0]
-                best_priority = best_table[1]
-                best_source = best_table[2]
-        
-        # Priority 3: Regex patterns in all text (fallback)
-        if best_priority < 5:  # Only use regex if we haven't found a good match
-            patterns = [
-                (r'total\s+fees\s+and\s+disbursements[^0-9]*([€$£¥₹]?\s*[0-9,]+\.?\d*)', 20),
-                (r'gross\s+amount\s+incl[^0-9]*([€$£¥₹]?\s*[0-9,]+\.?\d*)', 18),
-                (r'grand\s+total[^0-9]*([€$£¥₹]?\s*[0-9,]+\.?\d*)', 15),
-                (r'final\s+total[^0-9]*([€$£¥₹]?\s*[0-9,]+\.?\d*)', 15),
-                (r'total\s+due[^0-9]*([€$£¥₹]?\s*[0-9,]+\.?\d*)', 12),
-                (r'amount\s+due[^0-9]*([€$£¥₹]?\s*[0-9,]+\.?\d*)', 12),
-                (r'invoice\s+total[^0-9]*([€$£¥₹]?\s*[0-9,]+\.?\d*)', 10)
-            ]
-            
-            for pattern, priority in patterns:
-                matches = re.finditer(pattern, all_text, re.IGNORECASE)
-                for match in matches:
-                    amount_info = self.parse_amount_with_currency(match.group(1))
-                    if isinstance(amount_info["value"], (int, float)) and amount_info["value"] > 0:
-                        if priority > best_priority:
-                            best_total = amount_info
-                            best_priority = priority
-                            best_source = f"Regex: {match.group(0)[:50]}"
-        
-        # Debug output
-        if best_total and isinstance(best_total["value"], (int, float)):
-            logger.debug(f"Selected total: {best_total['formatted']} from {best_source} (priority: {best_priority})")
-        
-        return best_total if best_total else {"value": None, "currency": "", "formatted": ""}
-    
     def extract_line_items_from_tables(self, tables: Dict) -> List[Dict]:
-        """Extract line items from tables with improved processing."""
+        """
+        Advanced table processing to extract invoice line items:
+        - Header row identification with flexible matching
+        - Data row processing with field type mapping
+        - Summary row detection and filtering
+        - Currency parsing and validation
+        """
         all_line_items = []
         
-        def match_header_enhanced(header_text: str) -> Optional[str]:
-            """More flexible header matching."""
-            if not header_text or not isinstance(header_text, str):
-                return None
-                
-            header_lower = header_text.lower().strip()
-            # Remove common punctuation and symbols for better matching
-            header_clean = re.sub(r'[^\w\s/]', ' ', header_lower)  # Keep forward slash for "hrs/qty"
-            header_clean = ' '.join(header_clean.split())  # Remove extra spaces
-            
-            # Check for exact matches first
-            for field, patterns in HEADER_PATTERNS.items():
-                for pattern in patterns:
-                    # Exact match
-                    if header_clean == pattern:
-                        return field
-                        
-                    # Check if pattern appears as a whole word
-                    if re.search(r'\b' + re.escape(pattern) + r'\b', header_clean):
-                        return field
-                        
-                    # Also check if the pattern is a substring (for compound headers like "Hrs/Qty")
-                    if pattern in header_clean:
-                        return field
-                        
-            return None
-            
-        def is_summary_row(row_data: List) -> bool:
-            """Check if a row contains summary/total information."""
-            row_text_combined = " ".join([str(cell) for cell in row_data]).lower()
-            for indicator in SUMMARY_INDICATORS:
-                if indicator in row_text_combined:
-                    return True
-            return False
-            
         logger.debug(f"Found {len(tables)} table pages to process")
         
         for page, rows_dict in tables.items():
@@ -1134,7 +594,7 @@ class TextractPDFProcessor:
                         logger.debug(f"Added description: {cell_value}")
                         
                     elif field == "quantity":
-                        qty_info = self.parse_amount_with_currency(cell_value)
+                        qty_info = parse_amount_with_currency(cell_value)
                         if isinstance(qty_info["value"], (int, float)):
                             line_item["Quantity"] = qty_info["value"]
                             has_meaningful_data = True
@@ -1150,14 +610,14 @@ class TextractPDFProcessor:
                                 logger.debug(f"Could not parse quantity: {cell_value}")
                                 
                     elif field == "unitprice":
-                        price_info = self.parse_amount_with_currency(cell_value)
+                        price_info = parse_amount_with_currency(cell_value)
                         line_item["UnitPrice"] = price_info
                         if isinstance(price_info["value"], (int, float)):
                             has_meaningful_data = True
                             logger.debug(f"Added unit price: {price_info}")
                             
                     elif field == "amount":
-                        amount_info = self.parse_amount_with_currency(cell_value)
+                        amount_info = parse_amount_with_currency(cell_value)
                         line_item["Amount"] = amount_info
                         if isinstance(amount_info["value"], (int, float)):
                             has_meaningful_data = True
@@ -1174,7 +634,14 @@ class TextractPDFProcessor:
         return all_line_items
     
     def parse_extracted_data(self, results: Dict) -> Dict:
-        """Parse Textract results into required invoice fields using enhanced logic"""
+        """
+        Convert raw Textract results into structured invoice data:
+        - Build key-value pairs from forms
+        - Combine all text for pattern matching
+        - Extract invoice number, date, totals, payment terms
+        - Process tables for line items
+        - Override with query results when available
+        """
         parsed = {
             "InvoiceNumber": None,
             "InvoiceDate": None,
@@ -1230,7 +697,7 @@ class TextractPDFProcessor:
                     table_totals[row_text] = " ".join([str(cell) for cell in row_values])
         
         # Extract fields using previous logic
-        parsed["InvoiceNumber"] = self.find_invoice_number(kv_pairs, all_text)
+        parsed["InvoiceNumber"] = find_invoice_number(kv_pairs, all_text)
         
         for k, v in kv_pairs.items():
             if any(keyword in k for keyword in DATE_KEYWORDS) and v.strip():
@@ -1244,7 +711,7 @@ class TextractPDFProcessor:
         
         parsed["LineItems"] = self.extract_line_items_from_tables(tables_dict)
         
-        parsed["InvoiceTotal"] = self.find_invoice_total(kv_pairs, table_totals, all_text)
+        parsed["InvoiceTotal"] = find_invoice_total(kv_pairs, table_totals, all_text)
         
         # Override with queries if available and better
         query_map = {
@@ -1259,7 +726,7 @@ class TextractPDFProcessor:
             answer = query.get('answer')
             if q_text in query_map and answer:
                 if q_text == "What is the total amount?":
-                    amount_info = self.parse_amount_with_currency(answer)
+                    amount_info = parse_amount_with_currency(answer)
                     if isinstance(amount_info["value"], (int, float)):
                         parsed[query_map[q_text]] = amount_info
                 else:
@@ -1278,20 +745,12 @@ class TextractPDFProcessor:
                       custom_queries: Optional[List[str]] = None,
                       max_parallel: int = 3) -> None:
         """
-        Process all PDF files in a folder with S3 synchronization
-        
-        Args:
-            folder_path: Path to folder containing PDF files
-            bucket_name: S3 bucket name
-            s3_prefix: S3 prefix for uploaded files
-            output_dir: Directory for output files
-            enable_layout: Extract layout elements
-            enable_forms: Extract form data
-            enable_tables: Extract tables
-            enable_queries: Enable custom queries
-            enable_signatures: Detect signatures
-            custom_queries: List of custom query strings
-            max_parallel: Maximum parallel processing jobs
+        Batch processing orchestration for folder of PDFs:
+        1. Sync local folder with S3 using S3FolderSync
+        2. Process files in parallel with ThreadPoolExecutor
+        3. Generate individual and summary reports
+        4. Save parsed JSON outputs
+        5. Display results and statistics
         """
         logger.info("="*80)
         logger.info("STARTING BATCH DOCUMENT PROCESSING")
@@ -1417,7 +876,6 @@ class TextractPDFProcessor:
             logger.info(f"Extracted JSON saved to: {json_path}")
                 
         # Display final output in terminal
-        # Display final output in terminal
         print("\nExtracted Invoice Data Summary:")
         print("=" * 50)
         for filename, parsed in all_parsed:
@@ -1447,76 +905,3 @@ class TextractPDFProcessor:
         logger.info(f"\nReports saved to: {output_dir}/")
         logger.info(f"Main summary: {summary_path}")
         logger.info("="*50)
-
-
-def main():
-    """Main function to demonstrate batch processing with folder sync"""
-    
-    # Configuration
-    FOLDER_PATH = "invoices" 
-    S3_BUCKET_NAME = "visal-invoice-processing-bucket-2"  
-    S3_PREFIX = "invoices/"  
-    OUTPUT_DIR = "textract_output"  
-    AWS_REGION = "us-east-1"  
-    
-    # Custom queries (optional) - these will be applied to all documents
-    custom_queries = [
-        "What is the total amount?",
-        "What is the invoice date?",
-        "What is the invoice number?",
-        "Who is the vendor or supplier?",
-        "What is the due date?",
-        "What is the payment terms?",
-        "What is the tax amount?",
-        "What is the customer name?"
-    ]
-    
-    # Create invoices folder if it doesn't exist
-    if not os.path.exists(FOLDER_PATH):
-        os.makedirs(FOLDER_PATH)
-        logger.info(f"Created folder: {FOLDER_PATH}")
-        logger.warning("Please add PDF files to this folder and run again.")
-        return
-    
-    # Check if folder has PDF files
-    pdf_count = len(list(Path(FOLDER_PATH).glob("*.pdf")))
-    if pdf_count == 0:
-        logger.warning(f"No PDF files found in '{FOLDER_PATH}' folder!")
-        logger.warning("Please add PDF files and run again.")
-        return
-    
-    logger.info(f"\nStarting batch processing of {pdf_count} PDF files...")
-    logger.info(f"Input folder: {FOLDER_PATH}")
-    logger.info(f"S3 bucket: {S3_BUCKET_NAME}")
-    logger.info(f"Output folder: {OUTPUT_DIR}")
-    logger.info("-" * 50)
-    
-    try:
-        # Initialize processor
-        processor = TextractPDFProcessor(region_name=AWS_REGION)
-        
-        # Process entire folder
-        processor.process_folder(
-            folder_path=FOLDER_PATH,
-            bucket_name=S3_BUCKET_NAME,
-            s3_prefix=S3_PREFIX,
-            output_dir=OUTPUT_DIR,
-            enable_layout=True,
-            enable_forms=True,
-            enable_tables=True,
-            enable_queries=True,
-            enable_signatures=True,
-            custom_queries=custom_queries,
-            max_parallel=3  # Process up to 3 documents in parallel
-        )
-        
-        logger.info("\nBatch processing completed successfully!")
-        logger.info(f"Check '{OUTPUT_DIR}' folder for detailed reports.")
-        
-    except Exception as e:
-        logger.error(f"\nError: {str(e)}")
-        logger.error("Please check the logs for more details.")
-
-
-if __name__ == "__main__":
-    main()

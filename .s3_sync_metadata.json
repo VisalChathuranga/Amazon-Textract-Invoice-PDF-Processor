@@ -1,0 +1,32 @@
+{
+  "invoice 01.pdf": {
+    "hash": "5a2efc726554d54516290e63a22bdf78",
+    "size": 744222,
+    "s3_key": "invoices/invoice 01.pdf",
+    "last_synced": "2025-09-05T21:56:33.688701"
+  },
+  "invoice 02.pdf": {
+    "hash": "232adcf84cb8fc0ba0a86da3c7c8104c",
+    "size": 1751813,
+    "s3_key": "invoices/invoice 02.pdf",
+    "last_synced": "2025-09-05T21:56:54.812608"
+  },
+  "invoice 03.pdf": {
+    "hash": "a0ff4dd36f8ab942535ea56d166f335f",
+    "size": 32692,
+    "s3_key": "invoices/invoice 03.pdf",
+    "last_synced": "2025-09-05T21:56:55.798856"
+  },
+  "invoice 04.pdf": {
+    "hash": "b54e5b5932f595861bb943e2aed0c066",
+    "size": 97757,
+    "s3_key": "invoices/invoice 04.pdf",
+    "last_synced": "2025-09-05T21:56:57.706967"
+  },
+  "invoice 05.pdf": {
+    "hash": "de836bfdda69a9915b8923121da52be5",
+    "size": 49713,
+    "s3_key": "invoices/invoice 05.pdf",
+    "last_synced": "2025-09-05T21:56:58.903478"
+  }
+}

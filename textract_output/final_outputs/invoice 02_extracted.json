@@ -1,0 +1,24 @@
+{
+  "InvoiceNumber": "79702 3A",
+  "InvoiceDate": "6/17/25,",
+  "LineItems": [
+    {
+      "Description": "WC 022 CERTIFICATE OF NO RECORDS (CNR) PER FEE SCHEDULE (0 pages)",
+      "Quantity": 75.0,
+      "UnitPrice": {
+        "value": 75.0,
+        "currency": "$",
+        "formatted": "$ 75.00"
+      }
+    },
+    {
+      "Description": "NO RECORDS PRODUCED, EXIST, OR HAVE BEEN DESTROYED"
+    }
+  ],
+  "InvoiceTotal": {
+    "value": 75.0,
+    "currency": "$",
+    "formatted": "$ 75.00"
+  },
+  "PaymentTerms": "$0.00"
+}

@@ -1,0 +1,87 @@
+{
+  "InvoiceNumber": "123100401",
+  "InvoiceDate": "1. März 2024",
+  "LineItems": [
+    {
+      "Description": "Basic Fee wmView",
+      "Quantity": 13000.0
+    },
+    {
+      "Description": "Basis fee for additional user accounts",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Basic Fee wmPos",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Basic Fee wmGuide",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Change of user accounts",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee T1",
+      "Quantity": 812.0
+    },
+    {
+      "Description": "Transaction Fee T2",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee T3",
+      "Quantity": 24300.0
+    },
+    {
+      "Description": "Transaction Fee T4",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee T5",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee T6",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee G1",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee G2",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee G3",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee G4",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee G5",
+      "Quantity": 0.0
+    },
+    {
+      "Description": "Transaction Fee G6",
+      "Quantity": 0.0
+    },
+    {
+      "UnitPrice": {
+        "value": 150.0,
+        "currency": "",
+        "formatted": "150.00"
+      }
+    }
+  ],
+  "InvoiceTotal": {
+    "value": 38112.0,
+    "currency": "€",
+    "formatted": "€ 38,112.00"
+  },
+  "PaymentTerms": "Immediate payment without discount. Any bank charges must be paid by the invoice recipient."
+}
