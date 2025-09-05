@@ -102,7 +102,7 @@ python main.py
 See the transformation power of AWS Textract with real examples:
 
 ### Original PDF Invoice (`invoices/sample_invoice.pdf`)
-![Sample Invoice PDF](invoices/invoice3.png)
+![Sample Invoice PDF](images/invoice3.png)
 
 ### Processed JSON Output (`textract_output/final_outputs/invoice 03_extracted.json`)
 
