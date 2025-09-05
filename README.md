@@ -97,11 +97,17 @@ mkdir invoices
 python main.py
 ```
 
-### 3. Review Results
+## 📊 Input vs Output Comparison
 
-The processor generates:
+See the transformation power of AWS Textract with real examples:
 
-**Structured JSON Output** (`textract_output/final_outputs/`):
+### Original PDF Invoice (`invoices/sample_invoice.pdf`)
+![Sample Invoice PDF](invoices\invoice 03.pdf)
+
+### Processed JSON Output (`textract_output/final_outputs/invoice 03_extracted.json`)
+
+The system extracts and structures the data into clean, machine-readable JSON:
+
 
 ```json
 {
@@ -129,9 +135,8 @@ The processor generates:
     "formatted": "$ 93.50"
   },
   "PaymentTerms": "Late payment is subject to fees of 5% per month."
-}}
+}
 ```
-
 **Detailed Markdown Reports** for each document with:
 - Document structure analysis
 - Form field extraction
