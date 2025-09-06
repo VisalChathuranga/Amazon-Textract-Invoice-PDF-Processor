@@ -108,7 +108,7 @@ python invoice_processor.py
 See the transformation power of AWS Textract with real examples:
 
 ### Original PDF Invoice (`invoices/sample_invoice.pdf`)
-![Sample Invoice PDF](invoices/invoice 03.png)
+![Sample Invoice PDF](invoices/invoice_03.png)
 
 ### Processed JSON Output (`textract_output/final_outputs/invoice 03_extracted.json`)
 
