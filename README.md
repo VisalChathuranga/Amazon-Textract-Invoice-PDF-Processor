@@ -66,10 +66,11 @@ MAX_PARALLEL = 3                      # Concurrent processing jobs
 
 ```text
 amazon-textract-invoice-processor/
-├── main.py                          # Main driver script
-├── requirements.txt                 # Python dependencies
-├── invoices/                        # Input directory for PDF files
-├── textract_output/                 # Processing results
+├── invoice_processor.py            #Alternative driver Script(Complete Code)  
+├── main.py                         # Main driver script
+├── requirements.txt                # Python dependencies
+├── invoices/                       # Input directory for PDF files
+├── textract_output/                # Processing results
 │   ├── final_outputs/              # Structured JSON data
 │   ├── *_report.md                 # Detailed markdown reports
 │   └── SUMMARY_REPORT.md           # Batch processing summary
@@ -96,13 +97,18 @@ mkdir invoices
 ```bash
 python main.py
 ```
+or 
+```bash
+python invoice_processor.py
+```
+
 
 ## 📊 Input vs Output Comparison
 
 See the transformation power of AWS Textract with real examples:
 
 ### Original PDF Invoice (`invoices/sample_invoice.pdf`)
-![Sample Invoice PDF](images/invoice3.png)
+![Sample Invoice PDF](invoices/invoice3.png)
 
 ### Processed JSON Output (`textract_output/final_outputs/invoice 03_extracted.json`)
 
